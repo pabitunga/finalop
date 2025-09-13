@@ -1,950 +1,681 @@
-// Faculty Jobs • Neo - Main Application Logic
-// This is a demo implementation with simulated Firebase functionality
+// app.js (ESM)
+// ===== Firebase Init =====
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics.js";
+import {
+  getAuth, onAuthStateChanged,
+  signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  sendPasswordResetEmail, signOut, updateProfile
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {
+  getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc,
+  updateDoc, serverTimestamp, query, where, orderBy, onSnapshot, limit
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-class FacultyJobsApp {
-    constructor() {
-        this.currentUser = null;
-        this.currentView = 'homepage';
-        this.currentStep = 1;
-        this.jobs = [];
-        this.users = [];
-        this.appConfig = {
-            validJobPolicy: "ADMIN_APPROVAL",
-            autoValidation: {
-                requireVerifiedEmail: true,
-                requiredFields: ["title", "institution", "location", "departments", "levels", "deadline"]
-            },
-            trustedEmployerMinLevel: 2
-        };
+const firebaseConfig = {
+  apiKey: "AIzaSyCQSyOBo8piJ1Je_fLtA7frZ7QDUKhAy18",
+  authDomain: "job-neo-852c8.firebaseapp.com",
+  projectId: "job-neo-852c8",
+  storageBucket: "job-neo-852c8.firebasestorage.app",
+  messagingSenderId: "117234893773",
+  appId: "1:117234893773:web:3081cde10e48248ce1fa84",
+  measurementId: "G-4VLX6VYH6R"
+};
+
+const appFB = initializeApp(firebaseConfig);
+try { getAnalytics(appFB); } catch { /* analytics optional on localhost */ }
+
+const auth = getAuth();
+const db = getFirestore();
+
+// ===== App State & Config =====
+const app = {
+  currentUser: null,
+  currentView: 'homepage',
+  currentStep: 1,
+  savedJobs: new Set(),
+  activeFilters: { departments: new Set(), levels: new Set(), search: '' },
+  departments: ["Mathematics","Statistics","Computer Science","Information Technology","Physics","Chemistry","Biology","Engineering","Economics","Management"],
+  levels: ["Assistant Professor","Associate Professor","Professor","Lecturer","Research Scientist","Postdoc"],
+  appConfig: {
+    validJobPolicy: "ADMIN_APPROVAL",
+    trustedEmployerMinLevel: 2
+  },
+  jobsUnsub: null,
+  cachedJobs: [],
+
+  // ===== Init =====
+  init() {
+    this.setupEventListeners();
+    this.renderFilters();
+    this.checkAuthState();
+    this.subscribeJobs(); // live render
+    console.log("Faculty Jobs App (Firebase) initialized");
+  },
+
+  // ===== Firebase Data =====
+  async ensureSeedJob() {
+    // if no jobs -> seed IIT Patna approved job so it appears instantly
+    const qJobs = query(collection(db, "jobs"), limit(1));
+    const snap = await getDocs(qJobs);
+    if (!snap.empty) return;
+
+    const now = new Date();
+    const seed = {
+      title: "Assistant Professor – Mathematics",
+      institution: "IIT Patna",
+      location: "Patna, Bihar, India",
+      departments: ["Mathematics", "Statistics"],
+      levels: ["Assistant Professor"],
+      description: "Teach UG/PG, guide projects, contribute to research in control theory. We are looking for candidates with strong background in mathematics and statistics.",
+      applicationLink: "https://example.com/apply",
+      deadline: new Date("2025-09-25"),
+      approved: true,
+      approved_at: now,
+      created_by: "seed",
+      active: true,
+      archived: false,
+      created_at: now
+    };
+    await addDoc(collection(db, "jobs"), seed);
+  },
+
+  subscribeJobs() {
+    // live query; we’ll locally categorize into open/closing/archived
+    const jobsRef = collection(db, "jobs");
+    const unsub = onSnapshot(
+      query(jobsRef, orderBy("approved_at", "desc")),
+      (snap) => {
+        this.cachedJobs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        this.renderJobs(); // re-render on any change
+      },
+      (err) => console.error("Jobs subscription error:", err)
+    );
+    this.jobsUnsub = unsub;
+    this.ensureSeedJob().catch(console.error);
+  },
+
+  // ===== Auth =====
+  checkAuthState() {
+    onAuthStateChanged(auth, async (user) => {
+      this.currentUser = user;
+      await this.updateAuthStateUI();
+      if (user) {
+        // load saved jobs
+        this.loadSavedJobs().catch(console.error);
+      } else {
         this.savedJobs = new Set();
-        this.activeFilters = {
-            departments: new Set(),
-            levels: new Set(),
-            search: ''
-        };
+      }
+      this.renderJobs();
+    });
+  },
 
-        this.departments = ["Mathematics", "Statistics", "Computer Science", "Information Technology", "Physics", "Chemistry", "Biology", "Engineering", "Economics", "Management"];
-        this.levels = ["Assistant Professor", "Associate Professor", "Professor", "Lecturer", "Research Scientist", "Postdoc"];
+  async loadSavedJobs() {
+    if (!this.currentUser) return;
+    const savedRef = collection(db, "users", this.currentUser.uid, "savedJobs");
+    const snap = await getDocs(savedRef);
+    this.savedJobs = new Set(snap.docs.map(d => d.id));
+  },
 
-        // Initialize when DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => this.init());
-        } else {
-            this.init();
-        }
+  async handleLogin(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = fd.get("email");
+    const password = fd.get("password");
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      this.toast("Login successful!", "success");
+      this.showView('homepage');
+    } catch (err) {
+      this.toast(err.message, "error");
     }
+  },
 
-    init() {
-        this.loadData();
-        this.setupEventListeners();
-        this.renderFilters();
-        this.renderJobs();
-        this.checkAuthState();
-        console.log('Faculty Jobs App initialized');
+  async handleRegister(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = fd.get("email");
+    const password = fd.get("password");
+    const displayName = fd.get("displayName");
+    const role = fd.get("role");
+    const orgName = document.getElementById("orgNameInput").value || null;
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      if (displayName) await updateProfile(cred.user, { displayName });
+
+      // default admin if email matches (demo only)
+      const finalRole = (email === "admin@facultyjobs.com") ? "admin" : role || "candidate";
+      const trust_level = finalRole === "employer" ? 1 : (finalRole === "admin" ? 5 : 0);
+
+      await setDoc(doc(db, "users", cred.user.uid), {
+        uid: cred.user.uid,
+        email, displayName, role: finalRole,
+        orgName: finalRole === "employer" ? orgName : null,
+        verifiedEmail: true,
+        trust_level,
+        created_at: serverTimestamp()
+      });
+
+      this.toast("Registration successful!", "success");
+      this.showView('homepage');
+    } catch (err) {
+      this.toast(err.message, "error");
     }
+  },
 
-    // Data Management
-    loadData() {
-        // Load from localStorage or use default data
-        const savedJobs = localStorage.getItem('facultyJobs_jobs');
-        const savedUsers = localStorage.getItem('facultyJobs_users');
-        const savedConfig = localStorage.getItem('facultyJobs_config');
-        const savedUser = localStorage.getItem('facultyJobs_currentUser');
-        const savedJobsSet = localStorage.getItem('facultyJobs_savedJobs');
-
-        if (savedJobs) {
-            this.jobs = JSON.parse(savedJobs);
-        } else {
-            // Initialize with sample data
-            this.jobs = [
-                {
-                    id: 'job1',
-                    title: 'Assistant Professor – Mathematics',
-                    institution: 'IIT Patna',
-                    location: 'Patna, Bihar, India',
-                    departments: ['Mathematics', 'Statistics'],
-                    levels: ['Assistant Professor'],
-                    description: 'Teach UG/PG, guide projects, contribute to research in control theory. We are looking for candidates with strong background in mathematics and statistics.',
-                    applicationLink: 'https://example.com/apply',
-                    deadline: new Date('2025-09-25'),
-                    approved: true,
-                    approved_at: new Date('2025-09-13T16:45:00Z'),
-                    created_by: 'employer1',
-                    active: true,
-                    archived: false,
-                    created_at: new Date('2025-09-10')
-                },
-                {
-                    id: 'job2',
-                    title: 'Professor – Computer Science',
-                    institution: 'BITS Pilani',
-                    location: 'Pilani, Rajasthan, India',
-                    departments: ['Computer Science', 'Information Technology'],
-                    levels: ['Professor'],
-                    description: 'Lead research in AI/ML, mentor PhD students, teach advanced courses. Looking for experienced faculty with publications in top-tier venues.',
-                    applicationLink: 'https://example.com/apply2',
-                    deadline: new Date('2025-10-15'),
-                    approved: false,
-                    approved_at: null,
-                    created_by: 'employer2',
-                    active: true,
-                    archived: false,
-                    created_at: new Date('2025-09-12')
-                },
-                {
-                    id: 'job3',
-                    title: 'Associate Professor – Physics',
-                    institution: 'NIT Trichy',
-                    location: 'Tiruchirappalli, Tamil Nadu, India',
-                    departments: ['Physics'],
-                    levels: ['Associate Professor'],
-                    description: 'Research in quantum physics and condensed matter. Strong publication record required.',
-                    applicationLink: 'https://example.com/apply3',
-                    deadline: new Date('2025-08-30'),
-                    approved: true,
-                    approved_at: new Date('2025-08-15'),
-                    created_by: 'employer3',
-                    active: true,
-                    archived: true,
-                    created_at: new Date('2025-08-01')
-                }
-            ];
-        }
-
-        if (savedUsers) {
-            this.users = JSON.parse(savedUsers);
-        } else {
-            this.users = [
-                {
-                    uid: 'admin1',
-                    email: 'admin@facultyjobs.com',
-                    displayName: 'Admin User',
-                    role: 'admin',
-                    verifiedEmail: true,
-                    trust_level: 5,
-                    created_at: new Date('2025-01-01')
-                },
-                {
-                    uid: 'employer1',
-                    email: 'employer@iitpatna.ac.in',
-                    displayName: 'IIT Patna HR',
-                    role: 'employer',
-                    orgName: 'IIT Patna',
-                    verifiedEmail: true,
-                    trust_level: 3,
-                    created_at: new Date('2025-01-15')
-                }
-            ];
-        }
-
-        if (savedConfig) {
-            this.appConfig = JSON.parse(savedConfig);
-        }
-
-        if (savedUser) {
-            this.currentUser = JSON.parse(savedUser);
-        }
-
-        if (savedJobsSet) {
-            this.savedJobs = new Set(JSON.parse(savedJobsSet));
-        }
+  async handleForgotPassword(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = fd.get("email");
+    try {
+      await sendPasswordResetEmail(auth, email);
+      this.toast("Password reset link sent", "success");
+      this.showAuthForm('login');
+    } catch (err) {
+      this.toast(err.message, "error");
     }
+  },
 
-    saveData() {
-        localStorage.setItem('facultyJobs_jobs', JSON.stringify(this.jobs));
-        localStorage.setItem('facultyJobs_users', JSON.stringify(this.users));
-        localStorage.setItem('facultyJobs_config', JSON.stringify(this.appConfig));
-        localStorage.setItem('facultyJobs_currentUser', JSON.stringify(this.currentUser));
-        localStorage.setItem('facultyJobs_savedJobs', JSON.stringify([...this.savedJobs]));
-    }
+  async logout() {
+    await signOut(auth);
+    this.toast("Logged out successfully", "success");
+    this.showView('homepage');
+  },
 
-    // Event Listeners
-    setupEventListeners() {
-        console.log('Setting up event listeners');
-        
-        // Navigation buttons
-        this.setupNavigationListeners();
-        
-        // Auth form listeners
-        this.setupAuthListeners();
+  async getCurrentUserDoc() {
+    if (!this.currentUser) return null;
+    const ref = doc(db, "users", this.currentUser.uid);
+    const snap = await getDoc(ref);
+    return snap.exists() ? snap.data() : null;
+  },
 
-        // Search and filter listeners
-        this.setupSearchAndFilterListeners();
+  // ===== UI wiring =====
+  setupEventListeners() {
+    // nav
+    const loginBtn = document.getElementById('loginBtn');
+    const registerBtn = document.getElementById('registerBtn');
+    const postJobBtn = document.getElementById('postJobBtn');
+    const adminBtn = document.getElementById('adminBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    loginBtn?.addEventListener('click', (e)=>{e.preventDefault(); this.showView('auth'); this.showAuthForm('login');});
+    registerBtn?.addEventListener('click', (e)=>{e.preventDefault(); this.showView('auth'); this.showAuthForm('register');});
+    postJobBtn?.addEventListener('click', (e)=>{e.preventDefault(); this.showView('postJob');});
+    adminBtn?.addEventListener('click', (e)=>{e.preventDefault(); this.showView('admin');});
+    logoutBtn?.addEventListener('click', (e)=>{e.preventDefault(); this.logout();});
 
-        // Job posting listeners
-        this.setupJobPostingListeners();
+    // auth forms
+    document.getElementById('switchToRegister')?.addEventListener('click', e=>{e.preventDefault(); this.showAuthForm('register');});
+    document.getElementById('switchToLogin')?.addEventListener('click', e=>{e.preventDefault(); this.showAuthForm('login');});
+    document.getElementById('forgotPasswordLink')?.addEventListener('click', e=>{e.preventDefault(); this.showAuthForm('forgotPassword');});
+    document.getElementById('backToLogin')?.addEventListener('click', e=>{e.preventDefault(); this.showAuthForm('login');});
 
-        // Admin listeners
-        this.setupAdminListeners();
+    document.getElementById('roleSelect')?.addEventListener('change', (e)=>{
+      const g = document.getElementById('orgNameGroup');
+      const inp = document.getElementById('orgNameInput');
+      if (e.target.value === 'employer') { g.classList.remove('hidden'); inp.required = true; }
+      else { g.classList.add('hidden'); inp.required = false; }
+    });
 
-        // Modal listeners
-        this.setupModalListeners();
-    }
+    document.getElementById('loginFormElement')?.addEventListener('submit', (e)=>this.handleLogin(e));
+    document.getElementById('registerFormElement')?.addEventListener('submit', (e)=>this.handleRegister(e));
+    document.getElementById('forgotPasswordFormElement')?.addEventListener('submit', (e)=>this.handleForgotPassword(e));
 
-    setupNavigationListeners() {
-        const loginBtn = document.getElementById('loginBtn');
-        const registerBtn = document.getElementById('registerBtn');
-        const postJobBtn = document.getElementById('postJobBtn');
-        const adminBtn = document.getElementById('adminBtn');
-        const logoutBtn = document.getElementById('logoutBtn');
+    // search
+    document.getElementById('searchInput')?.addEventListener('input', (e)=>{
+      this.activeFilters.search = e.target.value.toLowerCase();
+      this.renderJobs();
+    });
+    document.getElementById('clearFiltersBtn')?.addEventListener('click', (e)=>{e.preventDefault(); this.clearAllFilters();});
 
-        if (loginBtn) {
-            loginBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                console.log('Login button clicked');
-                this.showView('auth');
-                this.showAuthForm('login');
-            });
-        }
+    // post job flow
+    document.getElementById('nextStepBtn')?.addEventListener('click', ()=>this.nextStep());
+    document.getElementById('prevStepBtn')?.addEventListener('click', ()=>this.prevStep());
+    document.getElementById('submitJobBtn')?.addEventListener('click', ()=>this.submitJob());
 
-        if (registerBtn) {
-            registerBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                console.log('Register button clicked');
-                this.showView('auth');
-                this.showAuthForm('register');
-            });
-        }
-
-        if (postJobBtn) {
-            postJobBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showView('postJob');
-            });
-        }
-
-        if (adminBtn) {
-            adminBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showView('admin');
-            });
-        }
-
-        if (logoutBtn) {
-            logoutBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.logout();
-            });
-        }
-    }
-
-    setupAuthListeners() {
-        // Auth form navigation
-        const switchToRegister = document.getElementById('switchToRegister');
-        const switchToLogin = document.getElementById('switchToLogin');
-        const forgotPasswordLink = document.getElementById('forgotPasswordLink');
-        const backToLogin = document.getElementById('backToLogin');
-
-        if (switchToRegister) {
-            switchToRegister.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showAuthForm('register');
-            });
-        }
-
-        if (switchToLogin) {
-            switchToLogin.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showAuthForm('login');
-            });
-        }
-
-        if (forgotPasswordLink) {
-            forgotPasswordLink.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showAuthForm('forgotPassword');
-            });
-        }
-
-        if (backToLogin) {
-            backToLogin.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showAuthForm('login');
-            });
-        }
-
-        // Role selection
-        const roleSelect = document.getElementById('roleSelect');
-        if (roleSelect) {
-            roleSelect.addEventListener('change', (e) => {
-                const orgNameGroup = document.getElementById('orgNameGroup');
-                const orgNameInput = document.getElementById('orgNameInput');
-                if (e.target.value === 'employer') {
-                    orgNameGroup.classList.remove('hidden');
-                    orgNameInput.required = true;
-                } else {
-                    orgNameGroup.classList.add('hidden');
-                    orgNameInput.required = false;
-                }
-            });
-        }
-
-        // Form submissions
-        const loginForm = document.getElementById('loginFormElement');
-        const registerForm = document.getElementById('registerFormElement');
-        const forgotPasswordForm = document.getElementById('forgotPasswordFormElement');
-
-        if (loginForm) {
-            loginForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.handleLogin(e);
-            });
-        }
-
-        if (registerForm) {
-            registerForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.handleRegister(e);
-            });
-        }
-
-        if (forgotPasswordForm) {
-            forgotPasswordForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.handleForgotPassword(e);
-            });
-        }
-    }
-
-    setupSearchAndFilterListeners() {
-        // Search functionality
-        const searchInput = document.getElementById('searchInput');
-        if (searchInput) {
-            searchInput.addEventListener('input', (e) => {
-                console.log('Search input:', e.target.value);
-                this.activeFilters.search = e.target.value.toLowerCase();
-                this.renderJobs();
-            });
-        }
-
-        // Clear filters
-        const clearFiltersBtn = document.getElementById('clearFiltersBtn');
-        if (clearFiltersBtn) {
-            clearFiltersBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.clearAllFilters();
-            });
-        }
-    }
-
-    setupJobPostingListeners() {
-        const nextStepBtn = document.getElementById('nextStepBtn');
-        const prevStepBtn = document.getElementById('prevStepBtn');
-        const submitJobBtn = document.getElementById('submitJobBtn');
-
-        if (nextStepBtn) nextStepBtn.addEventListener('click', () => this.nextStep());
-        if (prevStepBtn) prevStepBtn.addEventListener('click', () => this.prevStep());
-        if (submitJobBtn) submitJobBtn.addEventListener('click', () => this.submitJob());
-    }
-
-    setupAdminListeners() {
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showAdminTab(e.target.dataset.tab);
-            });
-        });
-
-        const saveConfigBtn = document.getElementById('saveConfigBtn');
-        if (saveConfigBtn) {
-            saveConfigBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.saveConfig();
-            });
-        }
-    }
-
-    setupModalListeners() {
-        const closeModal = document.getElementById('closeModal');
-        const modalOverlay = document.querySelector('.modal-overlay');
-        
-        if (closeModal) {
-            closeModal.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.closeModal();
-            });
-        }
-
-        if (modalOverlay) {
-            modalOverlay.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.closeModal();
-            });
-        }
-
-        // Modal action buttons
-        const shareJobBtn = document.getElementById('shareJobBtn');
-        const saveJobBtn = document.getElementById('saveJobBtn');
-        const applyJobBtn = document.getElementById('applyJobBtn');
-
-        if (shareJobBtn) {
-            shareJobBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.shareJob();
-            });
-        }
-
-        if (saveJobBtn) {
-            saveJobBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.toggleSaveJobFromModal(e);
-            });
-        }
-
-        if (applyJobBtn) {
-            applyJobBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.applyToJob();
-            });
-        }
-    }
-
-    // Authentication
-    async handleLogin(e) {
+    // admin tabs
+    document.querySelectorAll('.tab-btn').forEach(btn=>{
+      btn.addEventListener('click',(e)=>{
         e.preventDefault();
-        const formData = new FormData(e.target);
-        const email = formData.get('email');
-        const password = formData.get('password');
+        this.showAdminTab(e.target.dataset.tab);
+      });
+    });
 
-        console.log('Login attempt:', email);
+    document.getElementById('saveConfigBtn')?.addEventListener('click', (e)=>{e.preventDefault(); this.saveConfig();});
 
-        // Simulate authentication - any password works for demo
-        const user = this.users.find(u => u.email === email);
-        if (user) {
-            this.currentUser = user;
-            this.saveData();
-            this.showToast('Login successful!', 'success');
-            this.updateAuthState();
-            this.showView('homepage');
-        } else {
-            this.showToast('User not found. Try admin@facultyjobs.com', 'error');
-        }
+    // modal
+    document.getElementById('closeModal')?.addEventListener('click',(e)=>{e.preventDefault(); this.closeModal();});
+    document.querySelector('.modal-overlay')?.addEventListener('click',(e)=>{e.preventDefault(); this.closeModal();});
+    document.getElementById('shareJobBtn')?.addEventListener('click',(e)=>{e.preventDefault(); this.shareJob();});
+    document.getElementById('saveJobBtn')?.addEventListener('click',(e)=>{e.preventDefault(); this.toggleSaveJobFromModal();});
+    document.getElementById('applyJobBtn')?.addEventListener('click',(e)=>{e.preventDefault(); this.applyToJob();});
+  },
+
+  async updateAuthStateUI() {
+    const loginBtn = document.getElementById('loginBtn');
+    const registerBtn = document.getElementById('registerBtn');
+    const postJobBtn = document.getElementById('postJobBtn');
+    const adminBtn = document.getElementById('adminBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    const emptyMessage = document.getElementById('emptyStateMessage');
+
+    if (this.currentUser) {
+      loginBtn?.classList.add('hidden');
+      registerBtn?.classList.add('hidden');
+      logoutBtn?.classList.remove('hidden');
+
+      const udoc = await this.getCurrentUserDoc();
+      const role = udoc?.role || 'candidate';
+      if (role === 'employer') postJobBtn?.classList.remove('hidden');
+      else postJobBtn?.classList.add('hidden');
+      if (role === 'admin') adminBtn?.classList.remove('hidden');
+      else adminBtn?.classList.add('hidden');
+
+      if (emptyMessage) emptyMessage.textContent = role === 'employer' ? 'Be the first to post a job.' : 'No matches—try clearing filters.';
+    } else {
+      loginBtn?.classList.remove('hidden');
+      registerBtn?.classList.remove('hidden');
+      postJobBtn?.classList.add('hidden');
+      adminBtn?.classList.add('hidden');
+      logoutBtn?.classList.add('hidden');
     }
+  },
 
-    async handleRegister(e) {
+  showView(viewName) {
+    document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));
+    document.getElementById(viewName+'View')?.classList.remove('hidden');
+    this.currentView = viewName;
+    const titles = {
+      homepage: 'Faculty Jobs • Neo',
+      auth: 'Login - Faculty Jobs • Neo',
+      postJob: 'Post a Job - Faculty Jobs • Neo',
+      admin: 'Admin Dashboard - Faculty Jobs • Neo'
+    };
+    document.title = titles[viewName] || 'Faculty Jobs • Neo';
+  },
+
+  showAuthForm(formName) {
+    document.querySelectorAll('.auth-form').forEach(f=>f.classList.add('hidden'));
+    document.getElementById(formName+'Form')?.classList.remove('hidden');
+  },
+
+  // ===== Filters & Rendering =====
+  renderFilters() {
+    const departmentFilters = document.getElementById('departmentFilters');
+    const levelFilters = document.getElementById('levelFilters');
+    if (!departmentFilters || !levelFilters) return;
+
+    departmentFilters.innerHTML = '';
+    levelFilters.innerHTML = '';
+
+    this.departments.forEach(dept=>{
+      const chip = document.createElement('button');
+      chip.className = 'filter-chip';
+      chip.textContent = dept;
+      chip.addEventListener('click',(e)=>{
         e.preventDefault();
-        const formData = new FormData(e.target);
-        const email = formData.get('email');
-        const password = formData.get('password');
-        const displayName = formData.get('displayName') || formData.get('name');
-        const role = formData.get('role') || document.getElementById('roleSelect').value;
-        const orgName = document.getElementById('orgNameInput').value;
+        if (this.activeFilters.departments.has(dept)) this.activeFilters.departments.delete(dept);
+        else this.activeFilters.departments.add(dept);
+        chip.classList.toggle('active');
+        this.renderJobs();
+      });
+      departmentFilters.appendChild(chip);
+    });
 
-        // Check if user already exists
-        if (this.users.find(u => u.email === email)) {
-            this.showToast('User already exists', 'error');
-            return;
-        }
-
-        // Create new user
-        const newUser = {
-            uid: 'user_' + Date.now(),
-            email,
-            displayName,
-            role,
-            orgName: role === 'employer' ? orgName : null,
-            verifiedEmail: true,
-            trust_level: role === 'employer' ? 1 : 0,
-            created_at: new Date()
-        };
-
-        this.users.push(newUser);
-        this.currentUser = newUser;
-        this.saveData();
-        
-        this.showToast('Registration successful! Email verified.', 'success');
-        this.updateAuthState();
-        this.showView('homepage');
-    }
-
-    async handleForgotPassword(e) {
+    this.levels.forEach(level=>{
+      const chip = document.createElement('button');
+      chip.className = 'filter-chip';
+      chip.textContent = level;
+      chip.addEventListener('click',(e)=>{
         e.preventDefault();
-        this.showToast('Password reset link sent to your email', 'success');
-        this.showAuthForm('login');
-    }
-
-    logout() {
-        this.currentUser = null;
-        localStorage.removeItem('facultyJobs_currentUser');
-        this.updateAuthState();
-        this.showView('homepage');
-        this.showToast('Logged out successfully', 'success');
-    }
-
-    checkAuthState() {
-        this.updateAuthState();
-    }
-
-    updateAuthState() {
-        const loginBtn = document.getElementById('loginBtn');
-        const registerBtn = document.getElementById('registerBtn');
-        const postJobBtn = document.getElementById('postJobBtn');
-        const adminBtn = document.getElementById('adminBtn');
-        const logoutBtn = document.getElementById('logoutBtn');
-
-        if (this.currentUser) {
-            if (loginBtn) loginBtn.classList.add('hidden');
-            if (registerBtn) registerBtn.classList.add('hidden');
-            if (logoutBtn) logoutBtn.classList.remove('hidden');
-
-            if (this.currentUser.role === 'employer' && postJobBtn) {
-                postJobBtn.classList.remove('hidden');
-            }
-
-            if (this.currentUser.role === 'admin' && adminBtn) {
-                adminBtn.classList.remove('hidden');
-            }
-
-            // Update empty state message
-            const emptyMessage = document.getElementById('emptyStateMessage');
-            if (emptyMessage) {
-                if (this.currentUser.role === 'employer') {
-                    emptyMessage.textContent = 'Be the first to post a job.';
-                } else {
-                    emptyMessage.textContent = 'No matches—try clearing filters.';
-                }
-            }
-        } else {
-            if (loginBtn) loginBtn.classList.remove('hidden');
-            if (registerBtn) registerBtn.classList.remove('hidden');
-            if (postJobBtn) postJobBtn.classList.add('hidden');
-            if (adminBtn) adminBtn.classList.add('hidden');
-            if (logoutBtn) logoutBtn.classList.add('hidden');
-        }
-    }
-
-    // View Management
-    showView(viewName) {
-        console.log('Showing view:', viewName);
-        
-        // Hide all views
-        document.querySelectorAll('.view').forEach(view => {
-            view.classList.add('hidden');
-        });
-
-        // Show selected view
-        const viewElement = document.getElementById(viewName + 'View');
-        if (viewElement) {
-            viewElement.classList.remove('hidden');
-            this.currentView = viewName;
-
-            // Update page title
-            const titles = {
-                homepage: 'Faculty Jobs • Neo',
-                auth: 'Login - Faculty Jobs • Neo',
-                postJob: 'Post a Job - Faculty Jobs • Neo',
-                admin: 'Admin Dashboard - Faculty Jobs • Neo'
-            };
-            document.title = titles[viewName] || 'Faculty Jobs • Neo';
-        }
-    }
-
-    showAuthForm(formName) {
-        console.log('Showing auth form:', formName);
-        
-        document.querySelectorAll('.auth-form').forEach(form => {
-            form.classList.add('hidden');
-        });
-
-        const formElement = document.getElementById(formName + 'Form');
-        if (formElement) {
-            formElement.classList.remove('hidden');
-        }
-    }
-
-    // Job Rendering
-    renderJobs() {
-        const openPositions = document.getElementById('openPositions');
-        const closingSoon = document.getElementById('closingSoon');
-        const archivedJobs = document.getElementById('archivedJobs');
-        const openPositionsEmpty = document.getElementById('openPositionsEmpty');
-
-        if (!openPositions) return;
-
-        // Clear existing content
-        openPositions.innerHTML = '';
-        if (closingSoon) closingSoon.innerHTML = '';
-        if (archivedJobs) archivedJobs.innerHTML = '';
-
-        // Filter jobs
-        const filteredJobs = this.filterJobs();
-        console.log('Filtered jobs:', filteredJobs.length);
-
-        // Categorize jobs
-        const now = new Date();
-        const thirtyDaysFromNow = new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000));
-
-        const open = filteredJobs.filter(job => 
-            job.approved && !job.archived && job.active !== false
-        ).sort((a, b) => new Date(b.approved_at) - new Date(a.approved_at));
-
-        const closing = filteredJobs.filter(job => 
-            job.approved && !job.archived && job.active !== false && 
-            new Date(job.deadline) <= thirtyDaysFromNow
-        ).sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
-
-        const archived = filteredJobs.filter(job => 
-            job.archived || new Date(job.deadline) < now
-        ).sort((a, b) => new Date(b.approved_at || b.created_at) - new Date(a.approved_at || a.created_at));
-
-        // Render job cards
-        if (open.length === 0) {
-            if (openPositionsEmpty) openPositionsEmpty.classList.remove('hidden');
-        } else {
-            if (openPositionsEmpty) openPositionsEmpty.classList.add('hidden');
-            open.forEach(job => {
-                openPositions.appendChild(this.createJobCard(job));
-            });
-        }
-
-        if (closingSoon) {
-            closing.forEach(job => {
-                closingSoon.appendChild(this.createJobCard(job));
-            });
-        }
-
-        if (archivedJobs) {
-            archived.forEach(job => {
-                archivedJobs.appendChild(this.createJobCard(job));
-            });
-        }
-    }
-
-    filterJobs() {
-        return this.jobs.filter(job => {
-            // Search filter
-            if (this.activeFilters.search) {
-                const searchTerm = this.activeFilters.search;
-                const searchableText = `${job.title} ${job.institution} ${job.location} ${job.departments.join(' ')}`.toLowerCase();
-                if (!searchableText.includes(searchTerm)) {
-                    return false;
-                }
-            }
-
-            // Department filter
-            if (this.activeFilters.departments.size > 0) {
-                const hasMatchingDepartment = job.departments.some(dept => 
-                    this.activeFilters.departments.has(dept)
-                );
-                if (!hasMatchingDepartment) {
-                    return false;
-                }
-            }
-
-            // Level filter
-            if (this.activeFilters.levels.size > 0) {
-                const hasMatchingLevel = job.levels.some(level => 
-                    this.activeFilters.levels.has(level)
-                );
-                if (!hasMatchingLevel) {
-                    return false;
-                }
-            }
-
-            return true;
-        });
-    }
-
-    createJobCard(job) {
-        const card = document.createElement('div');
-        card.className = 'job-card';
-        card.dataset.jobId = job.id;
-
-        const deadline = this.formatDate(job.deadline);
-        const description = job.description.length > 140 ? 
-            job.description.substring(0, 140) + '...' : 
-            job.description;
-
-        const isSaved = this.savedJobs.has(job.id);
-
-        card.innerHTML = `
-            <div class="job-card-title">${job.title}</div>
-            <div class="job-card-institution">${job.institution} • ${job.location}</div>
-            ${job.approved ? '<div class="job-card-status">Approved</div>' : ''}
-            <div class="job-card-chips">
-                ${job.departments.map(dept => `<span class="job-chip job-chip--department">${dept}</span>`).join('')}
-                ${job.levels.map(level => `<span class="job-chip job-chip--level">${level}</span>`).join('')}
-            </div>
-            <div class="job-card-description">${description}</div>
-            <div class="job-card-deadline">${deadline}</div>
-            <div class="job-card-actions">
-                <button class="btn btn--primary btn--sm" onclick="window.open('${job.applicationLink}', '_blank')">Apply</button>
-                <button class="btn btn--outline btn--sm" onclick="app.showJobDetails('${job.id}')">Details</button>
-                <button class="btn btn--secondary btn--sm ${isSaved ? 'saved' : ''}" onclick="app.toggleSaveJob(event, '${job.id}')">${isSaved ? 'Saved' : 'Save'}</button>
-            </div>
-        `;
-
-        return card;
-    }
-
-    formatDate(date) {
-        const d = new Date(date);
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const year = d.getFullYear();
-        return `${day}/${month}/${year}`;
-    }
-
-    // Filters
-    renderFilters() {
-        const departmentFilters = document.getElementById('departmentFilters');
-        const levelFilters = document.getElementById('levelFilters');
-
-        if (!departmentFilters || !levelFilters) return;
-
-        departmentFilters.innerHTML = '';
-        levelFilters.innerHTML = '';
-
-        this.departments.forEach(dept => {
-            const chip = document.createElement('button');
-            chip.className = 'filter-chip';
-            chip.textContent = dept;
-            chip.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.toggleFilter('departments', dept);
-            });
-            departmentFilters.appendChild(chip);
-        });
-
-        this.levels.forEach(level => {
-            const chip = document.createElement('button');
-            chip.className = 'filter-chip';
-            chip.textContent = level;
-            chip.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.toggleFilter('levels', level);
-            });
-            levelFilters.appendChild(chip);
-        });
-    }
-
-    toggleFilter(filterType, value) {
-        console.log('Toggling filter:', filterType, value);
-        
-        if (this.activeFilters[filterType].has(value)) {
-            this.activeFilters[filterType].delete(value);
-        } else {
-            this.activeFilters[filterType].add(value);
-        }
-
-        this.updateFilterUI();
+        if (this.activeFilters.levels.has(level)) this.activeFilters.levels.delete(level);
+        else this.activeFilters.levels.add(level);
+        chip.classList.toggle('active');
         this.renderJobs();
+      });
+      levelFilters.appendChild(chip);
+    });
+  },
+
+  clearAllFilters() {
+    this.activeFilters = { departments: new Set(), levels: new Set(), search: '' };
+    document.getElementById('searchInput').value = '';
+    document.querySelectorAll('.filter-chip.active').forEach(el=>el.classList.remove('active'));
+    this.renderJobs();
+  },
+
+  getFilteredJobs() {
+    return this.cachedJobs.filter(job=>{
+      // search
+      if (this.activeFilters.search) {
+        const txt = `${job.title} ${job.institution} ${job.location} ${(job.departments||[]).join(' ')}`.toLowerCase();
+        if (!txt.includes(this.activeFilters.search)) return false;
+      }
+      // department
+      if (this.activeFilters.departments.size>0) {
+        const ok = (job.departments||[]).some(d=>this.activeFilters.departments.has(d));
+        if (!ok) return false;
+      }
+      // level
+      if (this.activeFilters.levels.size>0) {
+        const ok = (job.levels||[]).some(l=>this.activeFilters.levels.has(l));
+        if (!ok) return false;
+      }
+      return true;
+    });
+  },
+
+  renderJobs() {
+    const openPositions = document.getElementById('openPositions');
+    const closingSoon = document.getElementById('closingSoon');
+    const archivedJobs = document.getElementById('archivedJobs');
+    const openPositionsEmpty = document.getElementById('openPositionsEmpty');
+    if (!openPositions) return;
+
+    openPositions.innerHTML = '';
+    if (closingSoon) closingSoon.innerHTML = '';
+    if (archivedJobs) archivedJobs.innerHTML = '';
+
+    const now = new Date();
+    const in30d = new Date(now.getTime()+30*24*60*60*1000);
+    const filtered = this.getFilteredJobs();
+
+    const open = filtered.filter(j=>j.approved && !j.archived && j.active!==false)
+      .sort((a,b)=> new Date(b.approved_at||b.created_at) - new Date(a.approved_at||a.created_at));
+
+    const closing = filtered.filter(j=> j.approved && !j.archived && j.active!==false &&
+      j.deadline && new Date(j.deadline) <= in30d)
+      .sort((a,b)=> new Date(a.deadline) - new Date(b.deadline));
+
+    const archived = filtered.filter(j=> j.archived || (j.deadline && new Date(j.deadline) < now))
+      .sort((a,b)=> new Date(b.approved_at||b.created_at) - new Date(a.approved_at||a.created_at));
+
+    if (open.length === 0) openPositionsEmpty?.classList.remove('hidden');
+    else openPositionsEmpty?.classList.add('hidden');
+
+    open.forEach(job=> openPositions.appendChild(this.createJobCard(job)));
+    closing?.forEach(job=> closingSoon.appendChild(this.createJobCard(job)));
+    archived?.forEach(job=> archivedJobs.appendChild(this.createJobCard(job)));
+
+    // also update admin lists if admin view is open
+    this.renderAdminLists();
+  },
+
+  formatDate(date) {
+    if (!date) return '';
+    const d = new Date(date.seconds ? date.seconds*1000 : date);
+    const dd = String(d.getDate()).padStart(2,'0');
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  },
+
+  createJobCard(job) {
+    const card = document.createElement('div');
+    card.className = 'job-card';
+    card.dataset.jobId = job.id;
+
+    const deadline = this.formatDate(job.deadline);
+    const description = (job.description||'').length>140 ?
+      job.description.substring(0,140)+'…' : (job.description||'');
+
+    const isSaved = this.savedJobs.has(job.id);
+
+    card.innerHTML = `
+      <div class="job-card-title">${job.title||''}</div>
+      <div class="job-card-institution">${job.institution||''} • ${job.location||''}</div>
+      ${job.approved ? '<div class="job-card-status">Approved</div>' : ''}
+      <div class="job-card-chips">
+        ${(job.departments||[]).map(d=>`<span class="job-chip job-chip--department">${d}</span>`).join('')}
+        ${(job.levels||[]).map(l=>`<span class="job-chip job-chip--level">${l}</span>`).join('')}
+      </div>
+      <div class="job-card-description">${description}</div>
+      <div class="job-card-deadline">${deadline}</div>
+      <div class="job-card-actions">
+        <button class="btn btn--primary btn--sm" onclick="window.open('${job.applicationLink||'#'}','_blank')">Apply</button>
+        <button class="btn btn--outline btn--sm" onclick="window.app.showJobDetails('${job.id}')">Details</button>
+        <button class="btn btn--secondary btn--sm ${isSaved?'saved':''}" onclick="window.app.toggleSaveJob(event,'${job.id}')">${isSaved?'Saved':'Save'}</button>
+      </div>
+    `;
+    return card;
+  },
+
+  // ===== Post Job Flow =====
+  nextStep() {
+    if (this.currentStep===1) {
+      // build preview
+      const job = this.collectJobForm();
+      const preview = document.getElementById('previewCard');
+      preview.innerHTML = this.createJobCard({...job,id:'preview'}).innerHTML;
+      document.getElementById('step1').classList.add('hidden');
+      document.getElementById('step2').classList.remove('hidden');
+      document.getElementById('prevStepBtn').disabled = false;
+      document.getElementById('submitJobBtn').classList.add('hidden');
+      this.currentStep = 2;
+    } else if (this.currentStep===2) {
+      document.getElementById('step2').classList.add('hidden');
+      document.getElementById('step3').classList.remove('hidden');
+      document.getElementById('submitJobBtn').classList.remove('hidden');
+      this.currentStep = 3;
     }
-
-    updateFilterUI() {
-        document.querySelectorAll('.filter-chip').forEach(chip => {
-            const isActive = this.activeFilters.departments.has(chip.textContent) || 
-                             this.activeFilters.levels.has(chip.textContent);
-            chip.classList.toggle('active', isActive);
-        });
+  },
+  prevStep() {
+    if (this.currentStep===2) {
+      document.getElementById('step2').classList.add('hidden');
+      document.getElementById('step1').classList.remove('hidden');
+      document.getElementById('prevStepBtn').disabled = true;
+      this.currentStep = 1;
+    } else if (this.currentStep===3) {
+      document.getElementById('step3').classList.add('hidden');
+      document.getElementById('step2').classList.remove('hidden');
+      document.getElementById('submitJobBtn').classList.add('hidden');
+      this.currentStep = 2;
     }
-
-    clearAllFilters() {
-        console.log('Clearing all filters');
-        this.activeFilters.departments.clear();
-        this.activeFilters.levels.clear();
-        this.activeFilters.search = '';
-        const searchInput = document.getElementById('searchInput');
-        if (searchInput) searchInput.value = '';
-        this.updateFilterUI();
-        this.renderJobs();
+  },
+  collectJobForm() {
+    const f = document.getElementById('jobDetailsForm');
+    const fd = new FormData(f);
+    const departments = [...document.querySelectorAll('#departmentCheckboxes input[type=checkbox]:checked')].map(i=>i.value);
+    const levels = [...document.querySelectorAll('#levelCheckboxes input[type=checkbox]:checked')].map(i=>i.value);
+    const city = fd.get('city'), state = fd.get('state'), country = fd.get('country');
+    return {
+      title: fd.get('title')?.trim(),
+      institution: fd.get('institution')?.trim(),
+      location: `${city}, ${state}, ${country}`,
+      departments, levels,
+      description: fd.get('description')?.trim(),
+      applicationLink: fd.get('applicationLink')?.trim(),
+      deadline: fd.get('deadline') ? new Date(fd.get('deadline')) : null
+    };
+  },
+  async submitJob() {
+    if (!this.currentUser) { this.toast("Login as employer to post", "error"); return; }
+    const udoc = await this.getCurrentUserDoc();
+    if (udoc?.role!=='employer' && udoc?.role!=='admin') {
+      this.toast("Only employers/admin can post jobs", "error"); return;
     }
+    const job = this.collectJobForm();
 
-    // Job Details Modal
-    showJobDetails(jobId) {
-        console.log('Showing job details for:', jobId);
-        
-        const job = this.jobs.find(j => j.id === jobId);
-        if (!job) return;
+    // validation policy
+    const autoPublish = (this.appConfig.validJobPolicy === 'AUTO_PUBLISH_TRUSTED')
+      && (udoc?.trust_level ?? 0) >= (this.appConfig.trustedEmployerMinLevel ?? 2);
 
-        const modal = document.getElementById('jobDetailsModal');
-        const modalTitle = document.getElementById('modalJobTitle');
-        const modalContent = document.getElementById('modalJobContent');
+    const payload = {
+      ...job,
+      approved: !!autoPublish,
+      approved_at: autoPublish ? new Date() : null,
+      created_by: this.currentUser.uid,
+      active: true, archived: false,
+      created_at: new Date()
+    };
+    await addDoc(collection(db, "jobs"), payload);
+    this.toast(autoPublish ? "Job published!" : "Job submitted for review", "success");
+    this.showView('homepage');
+    this.currentStep = 1;
+    document.getElementById('step3').classList.add('hidden');
+    document.getElementById('step1').classList.remove('hidden');
+    document.getElementById('submitJobBtn').classList.add('hidden');
+    document.getElementById('prevStepBtn').disabled = true;
+  },
 
-        if (!modal || !modalTitle || !modalContent) return;
+  // ===== Admin =====
+  async renderAdminLists() {
+    const udoc = await this.getCurrentUserDoc();
+    if (!udoc || udoc.role!=='admin') return;
 
-        modalTitle.textContent = job.title;
+    const pendingList = document.getElementById('pendingJobsList');
+    const approvedList = document.getElementById('approvedJobsList');
+    const usersList = document.getElementById('usersList');
+    if (pendingList) pendingList.innerHTML = '';
+    if (approvedList) approvedList.innerHTML = '';
+    if (usersList) usersList.innerHTML = '';
 
-        const deadline = this.formatDate(job.deadline);
-        const isSaved = this.savedJobs.has(job.id);
+    const pending = this.cachedJobs.filter(j=>!j.approved && !j.archived);
+    const approved = this.cachedJobs.filter(j=>j.approved && !j.archived);
 
-        modalContent.innerHTML = `
-            <div class="job-details">
-                <div class="job-detail-section">
-                    <h4>Institution</h4>
-                    <p>${job.institution}</p>
-                </div>
-                <div class="job-detail-section">
-                    <h4>Location</h4>
-                    <p>${job.location}</p>
-                </div>
-                <div class="job-detail-section">
-                    <h4>Departments</h4>
-                    <div class="job-card-chips">
-                        ${job.departments.map(dept => `<span class="job-chip job-chip--department">${dept}</span>`).join('')}
-                    </div>
-                </div>
-                <div class="job-detail-section">
-                    <h4>Levels</h4>
-                    <div class="job-card-chips">
-                        ${job.levels.map(level => `<span class="job-chip job-chip--level">${level}</span>`).join('')}
-                    </div>
-                </div>
-                <div class="job-detail-section">
-                    <h4>Description</h4>
-                    <p>${job.description}</p>
-                </div>
-                <div class="job-detail-section">
-                    <h4>Application Deadline</h4>
-                    <p>${deadline}</p>
-                </div>
-            </div>
-        `;
+    pending.forEach(j=>{
+      const el = document.createElement('div');
+      el.className = 'admin-job';
+      el.innerHTML = `
+        <div><strong>${j.title}</strong> — ${j.institution} • ${j.location}</div>
+        <div class="gap-8">
+          <button class="btn btn--primary btn--sm" data-act="approve" data-id="${j.id}">Approve</button>
+          <button class="btn btn--outline btn--sm" data-act="archive" data-id="${j.id}">Archive</button>
+        </div>`;
+      pendingList?.appendChild(el);
+    });
 
-        // Update modal buttons
-        const saveBtn = document.getElementById('saveJobBtn');
-        
-        if (saveBtn) {
-            saveBtn.textContent = isSaved ? 'Saved' : 'Save';
-            saveBtn.className = `btn btn--secondary ${isSaved ? 'saved' : ''}`;
-        }
+    approved.forEach(j=>{
+      const el = document.createElement('div');
+      el.className = 'admin-job';
+      el.innerHTML = `
+        <div><strong>${j.title}</strong> — ${j.institution} • ${j.location}</div>
+        <div class="gap-8">
+          <button class="btn btn--outline btn--sm" data-act="archive" data-id="${j.id}">Archive</button>
+        </div>`;
+      approvedList?.appendChild(el);
+    });
 
-        // Store current job id for modal actions
-        modal.dataset.jobId = job.id;
-        modal.classList.remove('hidden');
+    // button actions (event delegation)
+    document.querySelectorAll('#pendingJobsList [data-act], #approvedJobsList [data-act]').forEach(btn=>{
+      btn.addEventListener('click', async (e)=>{
+        const id = e.currentTarget.getAttribute('data-id');
+        const act = e.currentTarget.getAttribute('data-act');
+        const ref = doc(db, "jobs", id);
+        if (act==='approve') await updateDoc(ref, { approved: true, approved_at: new Date() });
+        if (act==='archive') await updateDoc(ref, { archived: true, active: false });
+        this.toast(`Job ${act}d`, "success");
+      });
+    });
+  },
+
+  showAdminTab(tab) {
+    document.querySelectorAll('.admin-tab').forEach(el=>el.classList.add('hidden'));
+    if (tab==='pending') document.getElementById('pendingJobsTab')?.classList.remove('hidden');
+    if (tab==='approved') document.getElementById('approvedJobsTab')?.classList.remove('hidden');
+    if (tab==='users') document.getElementById('usersTab')?.classList.remove('hidden');
+    if (tab==='config') document.getElementById('configTab')?.classList.remove('hidden');
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
+  },
+
+  saveConfig() {
+    const p = document.getElementById('validJobPolicy').value;
+    const tl = parseInt(document.getElementById('trustedEmployerMinLevel').value||'2',10);
+    this.appConfig.validJobPolicy = p;
+    this.appConfig.trustedEmployerMinLevel = tl;
+    this.toast("Settings saved (local to client).", "success");
+  },
+
+  // ===== Modal & Misc =====
+  showJobDetails(jobId) {
+    const job = this.cachedJobs.find(j=>j.id===jobId);
+    if (!job) return;
+    document.getElementById('modalJobTitle').textContent = job.title||'Job Details';
+    document.getElementById('modalBody').innerHTML = `
+      <p><strong>Institution:</strong> ${job.institution} • ${job.location}</p>
+      <p><strong>Departments:</strong> ${(job.departments||[]).join(', ')}</p>
+      <p><strong>Levels:</strong> ${(job.levels||[]).join(', ')}</p>
+      <p><strong>Deadline:</strong> ${this.formatDate(job.deadline)}</p>
+      <p>${job.description||''}</p>`;
+    document.querySelector('.modal-overlay')?.classList.remove('hidden');
+    document.getElementById('jobModal')?.classList.remove('hidden');
+    document.getElementById('saveJobBtn')?.setAttribute('data-id', job.id);
+    document.getElementById('applyJobBtn')?.setAttribute('data-link', job.applicationLink||'#');
+  },
+  closeModal() {
+    document.querySelector('.modal-overlay')?.classList.add('hidden');
+    document.getElementById('jobModal')?.classList.add('hidden');
+  },
+  async toggleSaveJob(e, jobId) {
+    if (!this.currentUser) { this.toast("Login to save jobs", "error"); return; }
+    const ref = doc(db, "users", this.currentUser.uid, "savedJobs", jobId);
+    if (this.savedJobs.has(jobId)) {
+      // remove
+      await setDoc(ref, { saved: false }, { merge: true });
+      this.savedJobs.delete(jobId);
+      e.currentTarget.classList.remove('saved');
+      e.currentTarget.textContent = 'Save';
+    } else {
+      await setDoc(ref, { saved: true, saved_at: serverTimestamp() });
+      this.savedJobs.add(jobId);
+      e.currentTarget.classList.add('saved');
+      e.currentTarget.textContent = 'Saved';
     }
-
-    closeModal() {
-        const modal = document.getElementById('jobDetailsModal');
-        if (modal) modal.classList.add('hidden');
+  },
+  async toggleSaveJobFromModal() {
+    const btn = document.getElementById('saveJobBtn');
+    const jobId = btn.getAttribute('data-id');
+    // emulate clicking the card save when modal is open
+    await this.toggleSaveJob({ currentTarget: btn }, jobId);
+  },
+  applyToJob() {
+    const link = document.getElementById('applyJobBtn').getAttribute('data-link') || '#';
+    window.open(link, '_blank');
+  },
+  shareJob() {
+    try {
+      const url = window.location.href;
+      navigator.clipboard.writeText(url);
+      this.toast("Job link copied!", "success");
+    } catch {
+      this.toast("Copy failed", "error");
     }
+  },
 
-    shareJob() {
-        const modal = document.getElementById('jobDetailsModal');
-        const jobId = modal.dataset.jobId;
-        const url = `${window.location.origin}${window.location.pathname}#job=${jobId}`;
-        
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(url).then(() => {
-                this.showToast('Job link copied to clipboard!', 'success');
-            }).catch(() => {
-                this.showToast('Job link: ' + url, 'info');
-            });
-        } else {
-            this.showToast('Job link: ' + url, 'info');
-        }
-    }
+  // ===== Utility =====
+  toast(msg, type='info') {
+    // Minimal toast; you can style via CSS
+    console.log(`[${type}]`, msg);
+    alert(msg);
+  },
 
-    toggleSaveJob(event, jobId) {
-        if (event) event.stopPropagation();
-        
-        console.log('Toggling save for job:', jobId);
-        
-        if (this.savedJobs.has(jobId)) {
-            this.savedJobs.delete(jobId);
-            this.showToast('Job removed from saved', 'success');
-        } else {
-            this.savedJobs.add(jobId);
-            this.showToast('Job saved!', 'success');
-        }
+  // Build the checkbox lists on first load of Post Job view
+  ensurePostJobCheckboxes() {
+    const depBox = document.getElementById('departmentCheckboxes');
+    const lvlBox = document.getElementById('levelCheckboxes');
+    if (!depBox || !lvlBox || depBox.childElementCount>0 || lvlBox.childElementCount>0) return;
+    this.departments.forEach(d=>{
+      const id = `dep_${d.replace(/\s+/g,'_')}`;
+      depBox.insertAdjacentHTML('beforeend', `
+        <label><input type="checkbox" value="${d}" id="${id}"> ${d}</label>
+      `);
+    });
+    this.levels.forEach(l=>{
+      const id = `lvl_${l.replace(/\s+/g,'_')}`;
+      lvlBox.insertAdjacentHTML('beforeend', `
+        <label><input type="checkbox" value="${l}" id="${id}"> ${l}</label>
+      `);
+    });
+  }
+};
 
-        this.saveData();
-        this.renderJobs(); // Update cards
-    }
-
-    toggleSaveJobFromModal(event) {
-        const modal = document.getElementById('jobDetailsModal');
-        const jobId = modal.dataset.jobId;
-        this.toggleSaveJob(event, jobId);
-        
-        // Update modal button
-        const saveBtn = document.getElementById('saveJobBtn');
-        const isSaved = this.savedJobs.has(jobId);
-        if (saveBtn) {
-            saveBtn.textContent = isSaved ? 'Saved' : 'Save';
-            saveBtn.className = `btn btn--secondary ${isSaved ? 'saved' : ''}`;
-        }
-    }
-
-    applyToJob() {
-        const modal = document.getElementById('jobDetailsModal');
-        const jobId = modal.dataset.jobId;
-        const job = this.jobs.find(j => j.id === jobId);
-        
-        if (job) {
-            window.open(job.applicationLink, '_blank');
-        }
-    }
-
-    // Job posting placeholder methods
-    nextStep() {
-        this.showToast('Job posting flow coming soon!', 'info');
-    }
-
-    prevStep() {
-        this.showToast('Job posting flow coming soon!', 'info');
-    }
-
-    submitJob() {
-        this.showToast('Job posting feature coming soon!', 'info');
-    }
-
-    // Admin placeholder methods
-    showAdminTab(tabName) {
-        console.log('Showing admin tab:', tabName);
-        
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.tab === tabName);
-        });
-
-        document.querySelectorAll('.admin-tab').forEach(tab => {
-            tab.classList.add('hidden');
-        });
-
-        const selectedTab = document.getElementById(tabName + 'Tab');
-        if (selectedTab) {
-            selectedTab.classList.remove('hidden');
-        }
-    }
-
-    saveConfig() {
-        this.showToast('Configuration saved!', 'success');
-    }
-
-    // Utility Functions
-    showToast(message, type = 'info') {
-        const container = document.getElementById('toastContainer');
-        if (!container) return;
-
-        const toast = document.createElement('div');
-        toast.className = `toast toast--${type}`;
-        toast.textContent = message;
-
-        container.appendChild(toast);
-
-        // Auto remove after 4 seconds
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-            }
-        }, 4000);
-    }
-
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-}
-
-// Initialize the application
-const app = new FacultyJobsApp();
-
-// Make app globally available for onclick handlers
+// Expose to window for inline onclicks in HTML we generated
 window.app = app;
+
+// Run init when DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => { app.init(); app.ensurePostJobCheckboxes(); });
+} else {
+  app.init(); app.ensurePostJobCheckboxes();
+}
