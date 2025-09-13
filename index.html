@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Faculty Jobs • Neo</title>
+    <meta name="description" content="Find and post faculty positions at top academic institutions">
+    <meta property="og:title" content="Faculty Jobs • Neo">
+    <meta property="og:description" content="Find and post faculty positions at top academic institutions">
+    <meta property="og:type" content="website">
+    
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;550;600&display=swap" rel="preload" as="style">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;550;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-brand">
+                    <h1>Faculty Jobs • Neo</h1>
+                </div>
+                <div class="nav-actions">
+                    <button class="btn btn--outline btn--sm" id="loginBtn">Login</button>
+                    <button class="btn btn--primary btn--sm" id="registerBtn">Register</button>
+                    <button class="btn btn--secondary btn--sm hidden" id="postJobBtn">Post Job</button>
+                    <button class="btn btn--outline btn--sm hidden" id="adminBtn">Admin</button>
+                    <button class="btn btn--outline btn--sm hidden" id="logoutBtn">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            <!-- Homepage View -->
+            <div id="homepageView" class="view">
+                <!-- Search and Filters -->
+                <div class="search-filters">
+                    <div class="search-bar">
+                        <input type="text" class="form-control" id="searchInput" placeholder="Search jobs by title, institution, or location...">
+                    </div>
+                    <div class="filters">
+                        <div class="filter-group">
+                            <label>Departments:</label>
+                            <div class="filter-chips" id="departmentFilters"></div>
+                        </div>
+                        <div class="filter-group">
+                            <label>Levels:</label>
+                            <div class="filter-chips" id="levelFilters"></div>
+                        </div>
+                        <button class="btn btn--outline btn--sm" id="clearFiltersBtn">Clear All</button>
+                    </div>
+                </div>
+
+                <!-- Job Listings -->
+                <div class="job-sections">
+                    <!-- Open Positions -->
+                    <section class="job-section">
+                        <h2>Open Positions</h2>
+                        <div class="job-grid" id="openPositions">
+                            <!-- Job cards will be populated here -->
+                        </div>
+                        <div class="empty-state hidden" id="openPositionsEmpty">
+                            <p id="emptyStateMessage">No matches—try clearing filters.</p>
+                        </div>
+                    </section>
+
+                    <!-- Closing Soon -->
+                    <section class="job-section">
+                        <h2>Closing Soon</h2>
+                        <div class="job-grid" id="closingSoon">
+                            <!-- Job cards will be populated here -->
+                        </div>
+                    </section>
+
+                    <!-- Archived -->
+                    <section class="job-section">
+                        <h2>Archived</h2>
+                        <div class="job-grid" id="archivedJobs">
+                            <!-- Job cards will be populated here -->
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- Auth View -->
+            <div id="authView" class="view hidden">
+                <div class="auth-container">
+                    <!-- Login Form -->
+                    <div id="loginForm" class="auth-form">
+                        <h2>Login to Your Account</h2>
+                        <form id="loginFormElement">
+                            <div class="form-group">
+                                <label class="form-label">Email</label>
+                                <input type="email" class="form-control" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Password</label>
+                                <input type="password" class="form-control" required>
+                            </div>
+                            <button type="submit" class="btn btn--primary btn--full-width">Login</button>
+                        </form>
+                        <div class="auth-links">
+                            <a href="#" id="forgotPasswordLink">Forgot Password?</a>
+                            <p>Don't have an account? <a href="#" id="switchToRegister">Register here</a></p>
+                        </div>
+                    </div>
+
+                    <!-- Register Form -->
+                    <div id="registerForm" class="auth-form hidden">
+                        <h2>Create Your Account</h2>
+                        <form id="registerFormElement">
+                            <div class="form-group">
+                                <label class="form-label">Email</label>
+                                <input type="email" class="form-control" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Password</label>
+                                <input type="password" class="form-control" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Full Name</label>
+                                <input type="text" class="form-control" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Role</label>
+                                <select class="form-control" id="roleSelect" required>
+                                    <option value="">Select your role</option>
+                                    <option value="candidate">Job Candidate</option>
+                                    <option value="employer">Employer</option>
+                                </select>
+                            </div>
+                            <div class="form-group hidden" id="orgNameGroup">
+                                <label class="form-label">Organization Name</label>
+                                <input type="text" class="form-control" id="orgNameInput">
+                            </div>
+                            <button type="submit" class="btn btn--primary btn--full-width">Register</button>
+                        </form>
+                        <div class="auth-links">
+                            <p>Already have an account? <a href="#" id="switchToLogin">Login here</a></p>
+                        </div>
+                    </div>
+
+                    <!-- Forgot Password Form -->
+                    <div id="forgotPasswordForm" class="auth-form hidden">
+                        <h2>Reset Your Password</h2>
+                        <form id="forgotPasswordFormElement">
+                            <div class="form-group">
+                                <label class="form-label">Email</label>
+                                <input type="email" class="form-control" required>
+                            </div>
+                            <button type="submit" class="btn btn--primary btn--full-width">Send Reset Link</button>
+                        </form>
+                        <div class="auth-links">
+                            <p><a href="#" id="backToLogin">Back to Login</a></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Post Job View -->
+            <div id="postJobView" class="view hidden">
+                <div class="post-job-container">
+                    <!-- Step Indicator -->
+                    <div class="step-indicator">
+                        <div class="step active" data-step="1">
+                            <div class="step-number">1</div>
+                            <span>Details</span>
+                        </div>
+                        <div class="step" data-step="2">
+                            <div class="step-number">2</div>
+                            <span>Preview</span>
+                        </div>
+                        <div class="step" data-step="3">
+                            <div class="step-number">3</div>
+                            <span>Submit</span>
+                        </div>
+                    </div>
+
+                    <!-- Job Form Content -->
+                    <div class="post-job-content">
+                        <!-- Step 1: Details -->
+                        <div class="job-step" id="step1">
+                            <h2>Job Details</h2>
+                            <form id="jobDetailsForm">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Job Title *</label>
+                                        <input type="text" class="form-control" id="jobTitle" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Institution *</label>
+                                        <input type="text" class="form-control" id="jobInstitution" required>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">City *</label>
+                                        <input type="text" class="form-control" id="jobCity" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">State *</label>
+                                        <input type="text" class="form-control" id="jobState" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Country *</label>
+                                        <input type="text" class="form-control" id="jobCountry" required>
+                                    </div>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Departments *</label>
+                                        <div class="checkbox-group" id="departmentCheckboxes"></div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Levels *</label>
+                                        <div class="checkbox-group" id="levelCheckboxes"></div>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="form-label">Job Description *</label>
+                                    <textarea class="form-control" id="jobDescription" rows="6" required></textarea>
+                                    <small class="form-hint">First 140 characters will appear on the job card</small>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Application Link *</label>
+                                        <input type="url" class="form-control" id="jobApplicationLink" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Application Deadline *</label>
+                                        <input type="date" class="form-control" id="jobDeadline" required>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Step 2: Preview -->
+                        <div class="job-step hidden" id="step2">
+                            <h2>Preview Your Job</h2>
+                            <p>This is exactly how your job will appear to candidates:</p>
+                            <div class="preview-container">
+                                <div class="job-card" id="previewCard">
+                                    <!-- Preview card content will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: Submit -->
+                        <div class="job-step hidden" id="step3">
+                            <h2>Submit Your Job</h2>
+                            <div class="submit-info">
+                                <div class="info-box">
+                                    <h3>What happens next?</h3>
+                                    <p id="submitMessage">Your job will be submitted for admin review. Once approved, it will appear live on the job board and be visible to all candidates.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Navigation Buttons -->
+                        <div class="step-navigation">
+                            <button type="button" class="btn btn--outline" id="prevStepBtn" disabled>Previous</button>
+                            <button type="button" class="btn btn--primary" id="nextStepBtn">Next</button>
+                            <button type="button" class="btn btn--primary hidden" id="submitJobBtn">Submit Job</button>
+                        </div>
+                    </div>
+
+                    <!-- Live Preview Sidebar -->
+                    <div class="preview-sidebar">
+                        <h3>Live Preview</h3>
+                        <div class="job-card" id="livePreviewCard">
+                            <div class="job-card-placeholder">
+                                <p>Fill out the form to see your job preview</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin View -->
+            <div id="adminView" class="view hidden">
+                <div class="admin-container">
+                    <h2>Admin Dashboard</h2>
+                    
+                    <!-- Admin Tabs -->
+                    <div class="admin-tabs">
+                        <button class="tab-btn active" data-tab="pending">Pending Jobs</button>
+                        <button class="tab-btn" data-tab="approved">Approved Jobs</button>
+                        <button class="tab-btn" data-tab="users">Users</button>
+                        <button class="tab-btn" data-tab="config">Settings</button>
+                    </div>
+
+                    <!-- Pending Jobs Tab -->
+                    <div id="pendingJobsTab" class="admin-tab active">
+                        <div class="admin-job-list" id="pendingJobsList">
+                            <!-- Pending jobs will be populated here -->
+                        </div>
+                    </div>
+
+                    <!-- Approved Jobs Tab -->
+                    <div id="approvedJobsTab" class="admin-tab hidden">
+                        <div class="admin-job-list" id="approvedJobsList">
+                            <!-- Approved jobs will be populated here -->
+                        </div>
+                    </div>
+
+                    <!-- Users Tab -->
+                    <div id="usersTab" class="admin-tab hidden">
+                        <div class="admin-user-list" id="usersList">
+                            <!-- Users will be populated here -->
+                        </div>
+                    </div>
+
+                    <!-- Config Tab -->
+                    <div id="configTab" class="admin-tab hidden">
+                        <div class="config-form">
+                            <h3>Job Validation Policy</h3>
+                            <div class="form-group">
+                                <label class="form-label">Validation Policy</label>
+                                <select class="form-control" id="validJobPolicy">
+                                    <option value="ADMIN_APPROVAL">Admin Approval Required</option>
+                                    <option value="AUTO_PUBLISH_TRUSTED">Auto-Publish for Trusted Employers</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Trusted Employer Minimum Level</label>
+                                <input type="number" class="form-control" id="trustedEmployerMinLevel" min="0" max="5" value="2">
+                            </div>
+                            <button class="btn btn--primary" id="saveConfigBtn">Save Configuration</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Job Details Modal -->
+    <div class="modal hidden" id="jobDetailsModal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalJobTitle">Job Title</h3>
+                <button class="modal-close" id="closeModal">×</button>
+            </div>
+            <div class="modal-body" id="modalJobContent">
+                <!-- Job details content will be populated here -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn--outline" id="shareJobBtn">Share</button>
+                <button class="btn btn--secondary" id="saveJobBtn">Save</button>
+                <button class="btn btn--primary" id="applyJobBtn">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer">
+        <!-- Toast notifications will be added here -->
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
